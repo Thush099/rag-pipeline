@@ -1,0 +1,5 @@
+transformers==4.20.1
+torch==1.12.1
+torchvision==0.13.1
+numpy==1.22.3
+json5==0.9.5
