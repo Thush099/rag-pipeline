@@ -116,7 +116,9 @@ class BM25Retriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending BM25 score."""
-        if top_k <= 0 or self.n_docs == 0:
+        if top_k < 0:
+            raise ValueError(f"top_k must be non-negative, got {top_k}")
+        if top_k == 0 or self.n_docs == 0:
             return []
 
         query_tokens = self.tokenizer(question)
@@ -276,7 +278,9 @@ class DenseRetriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending cosine similarity."""
-        if top_k <= 0 or self.n_docs == 0 or not question or not question.strip():
+        if top_k < 0:
+            raise ValueError(f"top_k must be non-negative, got {top_k}")
+        if top_k == 0 or self.n_docs == 0 or not question or not question.strip():
             return []
 
         scores = self.get_scores(question)
@@ -366,7 +370,9 @@ class ReciprocalRankFusion:
             key=lambda did: (-rrf_scores[did], best_rank[did], did),
         )
         if top_k is not None:
-            if top_k <= 0:
+            if top_k < 0:
+                raise ValueError(f"top_k must be non-negative, got {top_k}")
+            if top_k == 0:
                 return []
             ordered_ids = ordered_ids[:top_k]
 
@@ -521,6 +527,8 @@ class CrossEncoderReRanker:
         top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """Re-rank candidate passages for the given question."""
+        if top_k is not None and top_k < 0:
+            raise ValueError(f"top_k must be non-negative, got {top_k}")
         if not candidates:
             return []
 
@@ -576,7 +584,7 @@ class CrossEncoderReRanker:
 
         scored.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
         if top_k is not None:
-            if top_k <= 0:
+            if top_k == 0:
                 return []
             scored = scored[:top_k]
 

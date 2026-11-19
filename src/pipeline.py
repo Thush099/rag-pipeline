@@ -54,9 +54,11 @@ class RAGPipeline:
     ) -> list[RetrievalResult]:
         """Retrieve ranked passages using bm25, dense, or hybrid (RRF + optional re-rank)."""
         k = self.config.top_k if top_k is None else top_k
+        if k < 0:
+            raise ValueError(f"top_k must be non-negative, got {k}")
         active_mode = mode or self.config.mode
 
-        if k <= 0 or not self.documents or not question or not question.strip():
+        if k == 0 or not self.documents or not question or not question.strip():
             return []
 
         if active_mode == "bm25":
