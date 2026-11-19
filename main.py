@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -58,7 +59,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit output as formatted JSON.",
     )
+    parser.add_argument(
+        "--min-groundedness",
+        type=float,
+        default=None,
+        help=(
+            "Exit non-zero when the answer's groundedness score is below this "
+            "threshold in [0, 1], so the pipeline can gate a CI job."
+        ),
+    )
     return parser
+
+
+def exit_code_for(result: PipelineResult, min_groundedness: Optional[float]) -> int:
+    """Map a pipeline result to a process exit code under a groundedness gate.
+
+    Returns 0 when no threshold is given or the answer meets it, and 1 when the
+    groundedness score is below the threshold. The threshold must be a finite
+    value in [0, 1]; anything else raises ``ValueError`` so a typo cannot
+    silently disable gating.
+    """
+    if min_groundedness is None:
+        return 0
+    if not math.isfinite(min_groundedness) or not 0.0 <= min_groundedness <= 1.0:
+        raise ValueError(
+            "min_groundedness must be a finite value in [0, 1]; "
+            f"got {min_groundedness!r}"
+        )
+    return 1 if result.grounded.groundedness_score < min_groundedness else 0
 
 
 def format_report(output: PipelineResult) -> str:
@@ -129,7 +157,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(result.to_dict(), indent=2))
     else:
         print(format_report(result))
-    return 0
+    return exit_code_for(result, args.min_groundedness)
 
 
 if __name__ == "__main__":

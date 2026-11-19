@@ -189,3 +189,45 @@ def test_cli_subprocess_default_execution() -> None:
     )
     assert "rag-04" in proc.stdout
     assert "Groundedness Score:" in proc.stdout
+
+
+def _pipeline_result(groundedness: float):
+    from src.utils import GroundedAnswer, PipelineResult
+
+    return PipelineResult(
+        question="q",
+        mode="hybrid",
+        results=[],
+        grounded=GroundedAnswer(answer="a [rag-01]", citations=[], groundedness_score=groundedness),
+    )
+
+
+def test_exit_code_no_threshold_always_succeeds() -> None:
+    from main import exit_code_for
+
+    assert exit_code_for(_pipeline_result(0.0), None) == 0
+
+
+def test_exit_code_gates_on_groundedness_threshold() -> None:
+    from main import exit_code_for
+
+    assert exit_code_for(_pipeline_result(0.5), 0.9) == 1
+    assert exit_code_for(_pipeline_result(0.9), 0.9) == 0
+    assert exit_code_for(_pipeline_result(1.0), 0.9) == 0
+
+
+def test_exit_code_rejects_invalid_threshold() -> None:
+    from main import exit_code_for
+
+    for bad in (float("nan"), float("inf"), -0.1, 1.5):
+        with pytest.raises(ValueError, match="min_groundedness must be a finite value"):
+            exit_code_for(_pipeline_result(1.0), bad)
+
+
+def test_cli_min_groundedness_gates_the_run() -> None:
+    exit_ok = cli_main(["--question", "How does BM25 work?", "--min-groundedness", "0.0"])
+    assert exit_ok == 0
+
+    # An empty query yields no supported sentences, so groundedness is 0.0.
+    exit_fail = cli_main(["--question", "", "--min-groundedness", "0.5"])
+    assert exit_fail == 1
