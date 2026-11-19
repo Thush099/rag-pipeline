@@ -63,6 +63,55 @@ def test_answer_grounder_citations_and_groundedness_discrimination() -> None:
     assert grounded.groundedness_score > ungrounded_score
 
 
+def test_groundedness_requires_valid_citations_and_scores_the_cited_source() -> None:
+    passages = [
+        RetrievalResult(
+            doc_id="policy-refund",
+            title="Refund policy",
+            text="Damaged orders delivered within 30 days qualify for a full refund.",
+            score=0.9,
+            rank=1,
+        ),
+        RetrievalResult(
+            doc_id="policy-shipping",
+            title="Shipping policy",
+            text="Shipping delays past 7 business days qualify for shipping fee reimbursement.",
+            score=0.8,
+            rank=2,
+        ),
+    ]
+    grounder = AnswerGrounder()
+
+    correct = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-refund]",
+        passages,
+    )
+    wrong_source = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-shipping]",
+        passages,
+    )
+    unknown_source = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [missing-doc]",
+        passages,
+    )
+    no_citation = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund.",
+        passages,
+    )
+
+    assert correct == 1.0
+    assert wrong_source < correct
+    assert unknown_source == 0.0
+    assert no_citation == 0.0
+
+    boundary_citations = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-refund] "
+        "Shipping delays past 7 business days qualify for shipping fee reimbursement. [policy-shipping]",
+        passages,
+    )
+    assert boundary_citations == 1.0
+
+
 def test_pipeline_modes_and_sample_corpus_retrieval() -> None:
     corpus = load_corpus(SAMPLE_CORPUS)
     assert 12 <= len(corpus) <= 15

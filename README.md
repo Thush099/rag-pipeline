@@ -5,11 +5,11 @@ A modular, offline-ready hybrid Retrieval-Augmented Generation (RAG) pipeline co
 ## Features
 
 - **Okapi BM25 (`BM25Retriever`)**: Genuine sparse lexical retriever with `k1=1.5`, `b=0.75`, smoothed Robertson-Sparck Jones IDF weighting, and document length normalization.
-- **Dense Vector Retrieval (`DenseRetriever`)**: Deterministic L2-normalized TF-IDF (`ngram_range=(1, 2)`, sublinear TF) cosine similarity by default, plus a pluggable `EmbeddingBackend` protocol / callable interface so external neural embeddings (e.g., SentenceTransformers, OpenAI, custom encoders) drop in without changing pipeline code.
-- **Reciprocal Rank Fusion (`ReciprocalRankFusion`)**: Scale-free rank merging (`sum(1 / (k + rank))`, default `k=60`) that boosts documents retrieved strongly by both sparse and dense branches while preserving per-retriever scores.
+- **Dense Vector Retrieval (`DenseRetriever`)**: Deterministic L2-normalized TF-IDF (`ngram_range=(1, 2)`, sublinear TF) cosine similarity by default, plus a pluggable `EmbeddingBackend` protocol / callable interface so external neural embeddings (e.g., SentenceTransformers, OpenAI, custom encoders) drop in without changing pipeline code. Custom backends must return finite document vectors (one per document) and one finite query vector with matching dimensions.
+- **Reciprocal Rank Fusion (`ReciprocalRankFusion`)**: Scale-free rank merging (`sum(1 / (k + rank))`, default `k=60`) that boosts documents retrieved strongly by both sparse and dense branches while preserving per-retriever scores. Optional per-list weights must be finite and non-negative.
 - **Cross-Encoder Re-Ranking (`CrossEncoderReRanker`)**: Jointly scores `(query, passage)` candidates using query term coverage, IDF-weighted overlap, exact phrase alignment, bigram overlap, and minimum covering token span tightness—plus optional custom cross-encoder callable support.
 - **Citation Grounding (`AnswerGrounder`)**: Extracts top supporting sentences with inline `[doc_id]` citations and computes a source-verification groundedness score in `[0.0, 1.0]`.
-- **Bundled Sample Corpus**: Includes `data/sample_corpus.jsonl` with 14 technical entries covering RAG architecture, BM25, dense retrieval, RRF, re-ranking, chunking, HNSW, grounding, and evaluation.
+- **Bundled Sample Corpus**: Includes `data/sample_corpus.jsonl` with 14 technical entries covering RAG architecture, BM25, dense retrieval, RRF, re-ranking, chunking, HNSW, grounding, and evaluation. Corpus document IDs must be unique because retrieval fusion and citations use IDs to identify sources.
 
 ## Architecture
 

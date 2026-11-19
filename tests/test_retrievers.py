@@ -76,6 +76,105 @@ def test_dense_retriever_tfidf_cosine_and_l2_normalization() -> None:
     assert 0.0 < results[0].score <= 1.0 + 1e-6
 
 
+def test_dense_retriever_rejects_document_embeddings_with_wrong_row_count() -> None:
+    corpus = [
+        {"id": "d1", "title": "Alpha", "text": "first doc"},
+        {"id": "d2", "title": "Beta", "text": "second doc"},
+    ]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(2, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one embedding per document"):
+        DenseRetriever(corpus, embedding_backend=InvalidBackend())
+
+
+def test_dense_retriever_rejects_non_finite_document_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.array([[np.nan, 1.0]], dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(2, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="finite values"):
+        DenseRetriever(corpus, embedding_backend=InvalidBackend())
+
+
+def test_dense_retriever_rejects_duplicate_document_ids() -> None:
+    corpus = [
+        {"id": "duplicate", "title": "Alpha", "text": "first doc"},
+        {"id": "duplicate", "title": "Beta", "text": "second doc"},
+    ]
+
+    with pytest.raises(ValueError, match="unique document IDs"):
+        DenseRetriever(corpus)
+
+
+def test_dense_retriever_rejects_query_embedding_with_wrong_dimension() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(3, dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="same dimension"):
+        retriever.get_scores("query")
+
+
+def test_callable_embedding_backend_rejects_multiple_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    def encoder(texts):
+        if len(texts) == 1 and texts[0] == "query":
+            return np.ones((2, 2), dtype=np.float32)
+        return np.ones((len(texts), 2), dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=encoder)
+    with pytest.raises(ValueError, match="one query embedding"):
+        retriever.get_scores("query")
+
+
+def test_dense_retriever_rejects_multiple_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones((2, 2), dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="one query embedding"):
+        retriever.get_scores("query")
+
+
+def test_dense_retriever_rejects_non_finite_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.array([np.inf, 1.0], dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="finite values"):
+        retriever.get_scores("query")
+
+
 def test_dense_retriever_accepts_protocol_and_callable_backends() -> None:
     corpus = [
         {"id": "d1", "title": "Alpha", "text": "first doc"},
