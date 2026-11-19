@@ -47,8 +47,8 @@ class BM25Retriever:
         b: float = 0.75,
         tokenizer: Optional[Callable[[str], List[str]]] = None,
     ) -> None:
-        if k1 < 0:
-            raise ValueError("BM25 parameter k1 must be non-negative.")
+        if not math.isfinite(k1) or k1 < 0:
+            raise ValueError("BM25 parameter k1 must be finite and non-negative.")
         if not 0.0 <= b <= 1.0:
             raise ValueError("BM25 parameter b must lie in [0.0, 1.0].")
 
@@ -460,7 +460,10 @@ class CrossEncoderReRanker:
     ) -> float:
         """Compute cross-encoder relevance score for a (question, passage) pair."""
         if self.scorer is not None:
-            return float(self.scorer(question, passage))
+            score = float(self.scorer(question, passage))
+            if not math.isfinite(score):
+                raise ValueError("reranker scorer must return a finite score")
+            return score
 
         query_content = extract_content_tokens(question)
         if not query_content:

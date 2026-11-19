@@ -13,6 +13,12 @@ from src.utils import load_corpus
 SAMPLE_CORPUS = Path(__file__).resolve().parents[1] / "data" / "sample_corpus.jsonl"
 
 
+@pytest.mark.parametrize("invalid_k1", [float("nan"), float("inf")])
+def test_bm25_rejects_non_finite_k1(invalid_k1: float) -> None:
+    with pytest.raises(ValueError, match="k1 must be finite and non-negative"):
+        BM25Retriever([], k1=invalid_k1)
+
+
 def test_bm25_idf_ordering_rare_exceeds_common() -> None:
     corpus = [
         {"id": "d1", "title": "Intro", "text": "neural search uses tokens and vectors"},
@@ -136,6 +142,14 @@ def test_dense_retriever_rejects_query_embedding_with_wrong_dimension() -> None:
     retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
     with pytest.raises(ValueError, match="same dimension"):
         retriever.get_scores("query")
+
+
+@pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), -float("inf")])
+def test_reranker_rejects_non_finite_custom_scores(invalid_score: float) -> None:
+    reranker = CrossEncoderReRanker(scorer=lambda _question, _passage: invalid_score)
+
+    with pytest.raises(ValueError, match="reranker scorer must return a finite score"):
+        reranker.re_rank(["a relevant passage"], "relevant")
 
 
 def test_callable_embedding_backend_rejects_multiple_query_embeddings() -> None:
