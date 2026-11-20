@@ -6,7 +6,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.models import BM25Retriever, CrossEncoderReRanker, DenseRetriever, ReciprocalRankFusion
+from src.models import (
+    BM25Retriever,
+    CrossEncoderReRanker,
+    DenseRetriever,
+    ReciprocalRankFusion,
+    TfidfEmbeddingBackend,
+)
 from src.pipeline import RAGPipeline
 from src.utils import load_corpus
 
@@ -227,6 +233,33 @@ def test_dense_retriever_accepts_protocol_and_callable_backends() -> None:
     callable_results = callable_retriever.retrieve("semantic query", top_k=1)
     assert callable_results[0].doc_id == "d1"
     assert callable_results[0].score == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    "invalid_range",
+    [
+        (0, 2),
+        (2, 1),
+        (3, 2),
+        (1, 1.5),
+        (1, float("nan")),
+        (1,),
+        (1, 2, 3),
+        (True, 2),
+        "ab",
+        None,
+    ],
+)
+def test_tfidf_embedding_backend_rejects_invalid_ngram_range(invalid_range) -> None:
+    with pytest.raises(ValueError, match="ngram_range"):
+        TfidfEmbeddingBackend(ngram_range=invalid_range)
+
+
+def test_tfidf_embedding_backend_accepts_valid_ngram_range() -> None:
+    for valid in ((1, 2), (1, 1), (2, 3), [1, 2]):
+        matrix = TfidfEmbeddingBackend(ngram_range=valid).encode_documents(["alpha beta gamma"])
+        assert matrix.shape[0] == 1
+        assert matrix.shape[1] > 0
 
 
 def test_negative_top_k_rejected_at_every_public_boundary() -> None:

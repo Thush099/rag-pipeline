@@ -63,6 +63,21 @@ def test_answer_grounder_citations_and_groundedness_discrimination() -> None:
     assert grounded.groundedness_score > ungrounded_score
 
 
+@pytest.mark.parametrize(
+    "invalid_threshold",
+    [float("nan"), float("inf"), float("-inf"), -0.1, 1.5, "x", None, True],
+)
+def test_answer_grounder_rejects_invalid_min_sentence_score(invalid_threshold) -> None:
+    """A malformed score threshold must fail at construction, not silently empty the answer."""
+    with pytest.raises(ValueError, match="min_sentence_score"):
+        AnswerGrounder(min_sentence_score=invalid_threshold)
+
+
+def test_answer_grounder_accepts_valid_min_sentence_score() -> None:
+    for threshold in (0.0, 0.05, 1.0):
+        assert AnswerGrounder(min_sentence_score=threshold).min_sentence_score == threshold
+
+
 def test_groundedness_requires_valid_citations_and_scores_the_cited_source() -> None:
     passages = [
         RetrievalResult(

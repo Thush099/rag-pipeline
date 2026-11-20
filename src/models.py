@@ -165,9 +165,18 @@ class TfidfEmbeddingBackend:
     """Default deterministic L2-normalized TF-IDF vector embedding backend."""
 
     def __init__(self, ngram_range: tuple[int, int] = (1, 2)) -> None:
+        if (
+            not isinstance(ngram_range, (tuple, list))
+            or len(ngram_range) != 2
+            or any(isinstance(n, bool) or not isinstance(n, int) for n in ngram_range)
+            or not 1 <= ngram_range[0] <= ngram_range[1]
+        ):
+            raise ValueError(
+                "ngram_range must be a pair of integers (min_n, max_n) with 1 <= min_n <= max_n."
+            )
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
-            ngram_range=ngram_range,
+            ngram_range=tuple(ngram_range),
             sublinear_tf=True,
             norm="l2",
             token_pattern=r"(?u)\b[a-zA-Z0-9]+\b",
@@ -602,7 +611,16 @@ class AnswerGrounder:
     """Extracts citation-backed supporting sentences and computes groundedness."""
 
     def __init__(self, min_sentence_score: float = 0.05) -> None:
-        self.min_sentence_score = min_sentence_score
+        if (
+            isinstance(min_sentence_score, bool)
+            or not isinstance(min_sentence_score, (int, float))
+            or not math.isfinite(min_sentence_score)
+            or not 0.0 <= min_sentence_score <= 1.0
+        ):
+            raise ValueError(
+                "min_sentence_score must be a finite number between 0.0 and 1.0."
+            )
+        self.min_sentence_score = float(min_sentence_score)
 
     def _score_sentence(
         self,
