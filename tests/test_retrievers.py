@@ -290,3 +290,47 @@ def test_negative_top_k_rejected_at_every_public_boundary() -> None:
 
     # zero keeps its documented empty-result behavior
     assert pipeline.retrieve("BM25", top_k=0) == []
+
+
+@pytest.mark.parametrize("bad_top_k", [True, False, 2.5, "3", float("nan")])
+def test_non_integer_top_k_rejected_at_every_public_boundary(bad_top_k) -> None:
+    """Booleans, floats, and strings must not silently truncate or crash slicing."""
+    corpus = load_corpus(SAMPLE_CORPUS)
+    bm25 = BM25Retriever(corpus)
+    dense = DenseRetriever(corpus)
+
+    for retriever in (bm25, dense):
+        with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+            retriever.retrieve("BM25", top_k=bad_top_k)
+
+    fusion = ReciprocalRankFusion()
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        fusion.fuse([bm25.retrieve("BM25", top_k=3)], top_k=bad_top_k)
+
+    reranker = CrossEncoderReRanker(corpus)
+    candidates = bm25.retrieve("BM25", top_k=3)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        reranker.re_rank(candidates, "BM25", top_k=bad_top_k)
+
+    pipeline = RAGPipeline(corpus)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        pipeline.retrieve("BM25", top_k=bad_top_k)
+
+
+def test_retrieve_rejects_none_top_k() -> None:
+    """Only fuse/re_rank accept None; retrievers require an explicit count."""
+    corpus = load_corpus(SAMPLE_CORPUS)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        BM25Retriever(corpus).retrieve("BM25", top_k=None)
+
+
+def test_optional_top_k_none_still_means_untruncated() -> None:
+    corpus = load_corpus(SAMPLE_CORPUS)
+    bm25 = BM25Retriever(corpus)
+    candidates = bm25.retrieve("BM25", top_k=3)
+
+    fusion = ReciprocalRankFusion()
+    assert len(fusion.fuse([candidates], top_k=None)) == len(candidates)
+
+    reranker = CrossEncoderReRanker(corpus)
+    assert len(reranker.re_rank(candidates, "BM25", top_k=None)) == len(candidates)

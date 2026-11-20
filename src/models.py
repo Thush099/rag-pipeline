@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import math
+from numbers import Integral
 import re
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Union, runtime_checkable
 
@@ -23,6 +24,14 @@ from src.utils import (
     split_sentences,
     tokenize,
 )
+
+def _validate_top_k(top_k: Optional[int], *, allow_none: bool = False) -> None:
+    """Reject booleans, floats, and strings so slicing cannot silently misread top_k."""
+    if top_k is None and allow_none:
+        return
+    if isinstance(top_k, bool) or not isinstance(top_k, Integral) or top_k < 0:
+        raise ValueError(f"top_k must be non-negative and an integer, got {top_k!r}")
+
 
 def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
     """L2-normalize 1D or 2D numpy arrays safely without NaN on zero vectors."""
@@ -116,8 +125,7 @@ class BM25Retriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending BM25 score."""
-        if top_k < 0:
-            raise ValueError(f"top_k must be non-negative, got {top_k}")
+        _validate_top_k(top_k)
         if top_k == 0 or self.n_docs == 0:
             return []
 
@@ -287,8 +295,7 @@ class DenseRetriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending cosine similarity."""
-        if top_k < 0:
-            raise ValueError(f"top_k must be non-negative, got {top_k}")
+        _validate_top_k(top_k)
         if top_k == 0 or self.n_docs == 0 or not question or not question.strip():
             return []
 
@@ -379,8 +386,7 @@ class ReciprocalRankFusion:
             key=lambda did: (-rrf_scores[did], best_rank[did], did),
         )
         if top_k is not None:
-            if top_k < 0:
-                raise ValueError(f"top_k must be non-negative, got {top_k}")
+            _validate_top_k(top_k)
             if top_k == 0:
                 return []
             ordered_ids = ordered_ids[:top_k]
@@ -539,8 +545,8 @@ class CrossEncoderReRanker:
         top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """Re-rank candidate passages for the given question."""
-        if top_k is not None and top_k < 0:
-            raise ValueError(f"top_k must be non-negative, got {top_k}")
+        if top_k is not None:
+            _validate_top_k(top_k)
         if not candidates:
             return []
 

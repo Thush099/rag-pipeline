@@ -40,7 +40,7 @@ Supported CLI options:
 - `--question`: Question to answer against the corpus (default: `"How does Reciprocal Rank Fusion improve hybrid RAG?"`)
 - `--corpus`: Path to `.jsonl` or `.json` corpus file (default: `data/sample_corpus.jsonl`)
 - `--mode`: Retrieval strategy (`hybrid`, `bm25`, or `dense`; default: `hybrid`)
-- `--top-k` / `--top_k`: Number of top passages to return (default: `5`)
+- `--top-k` / `--top_k`: Number of top passages to return (default: `5`; must be a non-negative integer — booleans, floats, and strings are rejected at every public `top_k` boundary)
 - `--no-rerank`: Disable `CrossEncoderReRanker`
 - `--json`: Print structured JSON output
 - `--min-groundedness FLOAT`: Exit non-zero when the answer's groundedness score is below `FLOAT`, so the pipeline can gate a CI job (e.g. `python main.py --min-groundedness 0.6`). The value must be finite and in `[0, 1]`; invalid values are rejected rather than silently disabling the gate.
