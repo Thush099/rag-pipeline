@@ -63,6 +63,70 @@ def test_answer_grounder_citations_and_groundedness_discrimination() -> None:
     assert grounded.groundedness_score > ungrounded_score
 
 
+@pytest.mark.parametrize(
+    "invalid_threshold",
+    [float("nan"), float("inf"), float("-inf"), -0.1, 1.5, "x", None, True],
+)
+def test_answer_grounder_rejects_invalid_min_sentence_score(invalid_threshold) -> None:
+    """A malformed score threshold must fail at construction, not silently empty the answer."""
+    with pytest.raises(ValueError, match="min_sentence_score"):
+        AnswerGrounder(min_sentence_score=invalid_threshold)
+
+
+def test_answer_grounder_accepts_valid_min_sentence_score() -> None:
+    for threshold in (0.0, 0.05, 1.0):
+        assert AnswerGrounder(min_sentence_score=threshold).min_sentence_score == threshold
+
+
+def test_groundedness_requires_valid_citations_and_scores_the_cited_source() -> None:
+    passages = [
+        RetrievalResult(
+            doc_id="policy-refund",
+            title="Refund policy",
+            text="Damaged orders delivered within 30 days qualify for a full refund.",
+            score=0.9,
+            rank=1,
+        ),
+        RetrievalResult(
+            doc_id="policy-shipping",
+            title="Shipping policy",
+            text="Shipping delays past 7 business days qualify for shipping fee reimbursement.",
+            score=0.8,
+            rank=2,
+        ),
+    ]
+    grounder = AnswerGrounder()
+
+    correct = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-refund]",
+        passages,
+    )
+    wrong_source = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-shipping]",
+        passages,
+    )
+    unknown_source = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [missing-doc]",
+        passages,
+    )
+    no_citation = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund.",
+        passages,
+    )
+
+    assert correct == 1.0
+    assert wrong_source < correct
+    assert unknown_source == 0.0
+    assert no_citation == 0.0
+
+    boundary_citations = grounder.score_groundedness(
+        "Damaged orders delivered within 30 days qualify for a full refund. [policy-refund] "
+        "Shipping delays past 7 business days qualify for shipping fee reimbursement. [policy-shipping]",
+        passages,
+    )
+    assert boundary_citations == 1.0
+
+
 def test_pipeline_modes_and_sample_corpus_retrieval() -> None:
     corpus = load_corpus(SAMPLE_CORPUS)
     assert 12 <= len(corpus) <= 15
@@ -140,3 +204,45 @@ def test_cli_subprocess_default_execution() -> None:
     )
     assert "rag-04" in proc.stdout
     assert "Groundedness Score:" in proc.stdout
+
+
+def _pipeline_result(groundedness: float):
+    from src.utils import GroundedAnswer, PipelineResult
+
+    return PipelineResult(
+        question="q",
+        mode="hybrid",
+        results=[],
+        grounded=GroundedAnswer(answer="a [rag-01]", citations=[], groundedness_score=groundedness),
+    )
+
+
+def test_exit_code_no_threshold_always_succeeds() -> None:
+    from main import exit_code_for
+
+    assert exit_code_for(_pipeline_result(0.0), None) == 0
+
+
+def test_exit_code_gates_on_groundedness_threshold() -> None:
+    from main import exit_code_for
+
+    assert exit_code_for(_pipeline_result(0.5), 0.9) == 1
+    assert exit_code_for(_pipeline_result(0.9), 0.9) == 0
+    assert exit_code_for(_pipeline_result(1.0), 0.9) == 0
+
+
+def test_exit_code_rejects_invalid_threshold() -> None:
+    from main import exit_code_for
+
+    for bad in (float("nan"), float("inf"), -0.1, 1.5):
+        with pytest.raises(ValueError, match="min_groundedness must be a finite value"):
+            exit_code_for(_pipeline_result(1.0), bad)
+
+
+def test_cli_min_groundedness_gates_the_run() -> None:
+    exit_ok = cli_main(["--question", "How does BM25 work?", "--min-groundedness", "0.0"])
+    assert exit_ok == 0
+
+    # An empty query yields no supported sentences, so groundedness is 0.0.
+    exit_fail = cli_main(["--question", "", "--min-groundedness", "0.5"])
+    assert exit_fail == 1

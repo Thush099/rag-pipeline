@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import math
+from numbers import Integral
 import re
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Union, runtime_checkable
 
@@ -24,7 +25,12 @@ from src.utils import (
     tokenize,
 )
 
-_CITATION_TAG_RE = re.compile(r"\s*\[[^\]]+\]")
+def _validate_top_k(top_k: Optional[int], *, allow_none: bool = False) -> None:
+    """Reject booleans, floats, and strings so slicing cannot silently misread top_k."""
+    if top_k is None and allow_none:
+        return
+    if isinstance(top_k, bool) or not isinstance(top_k, Integral) or top_k < 0:
+        raise ValueError(f"top_k must be non-negative and an integer, got {top_k!r}")
 
 
 def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
@@ -50,8 +56,8 @@ class BM25Retriever:
         b: float = 0.75,
         tokenizer: Optional[Callable[[str], List[str]]] = None,
     ) -> None:
-        if k1 < 0:
-            raise ValueError("BM25 parameter k1 must be non-negative.")
+        if not math.isfinite(k1) or k1 < 0:
+            raise ValueError("BM25 parameter k1 must be finite and non-negative.")
         if not 0.0 <= b <= 1.0:
             raise ValueError("BM25 parameter b must lie in [0.0, 1.0].")
 
@@ -119,7 +125,8 @@ class BM25Retriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending BM25 score."""
-        if top_k <= 0 or self.n_docs == 0:
+        _validate_top_k(top_k)
+        if top_k == 0 or self.n_docs == 0:
             return []
 
         query_tokens = self.tokenizer(question)
@@ -166,9 +173,18 @@ class TfidfEmbeddingBackend:
     """Default deterministic L2-normalized TF-IDF vector embedding backend."""
 
     def __init__(self, ngram_range: tuple[int, int] = (1, 2)) -> None:
+        if (
+            not isinstance(ngram_range, (tuple, list))
+            or len(ngram_range) != 2
+            or any(isinstance(n, bool) or not isinstance(n, int) for n in ngram_range)
+            or not 1 <= ngram_range[0] <= ngram_range[1]
+        ):
+            raise ValueError(
+                "ngram_range must be a pair of integers (min_n, max_n) with 1 <= min_n <= max_n."
+            )
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
-            ngram_range=ngram_range,
+            ngram_range=tuple(ngram_range),
             sublinear_tf=True,
             norm="l2",
             token_pattern=r"(?u)\b[a-zA-Z0-9]+\b",
@@ -212,6 +228,8 @@ class _CallableEmbeddingAdapter:
 
     def encode_query(self, query: str) -> np.ndarray:
         arr = np.asarray(self.encode_fn([query]), dtype=np.float32)
+        if arr.ndim == 2 and arr.shape[0] != 1:
+            raise ValueError("Embedding backend must return one query embedding.")
         return arr[0] if arr.ndim == 2 else arr
 
 
@@ -242,7 +260,11 @@ class DenseRetriever:
             )
 
         texts = [doc.full_text for doc in self.documents]
-        raw_embeddings = self.backend.encode_documents(texts)
+        raw_embeddings = np.asarray(self.backend.encode_documents(texts), dtype=np.float32)
+        if raw_embeddings.ndim != 2 or raw_embeddings.shape[0] != self.n_docs:
+            raise ValueError("Embedding backend must return one embedding per document as a 2D array.")
+        if not np.isfinite(raw_embeddings).all():
+            raise ValueError("Document embeddings must contain only finite values.")
         self.doc_embeddings = _l2_normalize(raw_embeddings)
 
     def get_scores(self, question: str) -> List[float]:
@@ -252,9 +274,19 @@ class DenseRetriever:
         if self.doc_embeddings.ndim != 2 or self.doc_embeddings.shape[1] == 0:
             return [0.0] * self.n_docs
 
-        query_vec = _l2_normalize(self.backend.encode_query(question))
+        query_vec = np.asarray(self.backend.encode_query(question), dtype=np.float32)
         if query_vec.ndim == 2:
+            if query_vec.shape[0] != 1:
+                raise ValueError("Embedding backend must return one query embedding.")
             query_vec = query_vec[0]
+        if query_vec.ndim != 1:
+            raise ValueError("Query embedding must be a 1D vector.")
+        if query_vec.shape[0] != self.doc_embeddings.shape[1]:
+            raise ValueError("Query and document embeddings must have the same dimension.")
+        if not np.isfinite(query_vec).all():
+            raise ValueError("Query embedding must contain only finite values.")
+
+        query_vec = _l2_normalize(query_vec)
         if query_vec.size == 0 or float(np.linalg.norm(query_vec)) == 0.0:
             return [0.0] * self.n_docs
 
@@ -263,7 +295,8 @@ class DenseRetriever:
 
     def retrieve(self, question: str, top_k: int = 5) -> List[RetrievalResult]:
         """Return top-k documents ranked by descending cosine similarity."""
-        if top_k <= 0 or self.n_docs == 0 or not question or not question.strip():
+        _validate_top_k(top_k)
+        if top_k == 0 or self.n_docs == 0 or not question or not question.strip():
             return []
 
         scores = self.get_scores(question)
@@ -293,8 +326,8 @@ class ReciprocalRankFusion:
     """Fuses multiple ranked result lists using Reciprocal Rank Fusion (RRF)."""
 
     def __init__(self, k: int = 60) -> None:
-        if k < 0:
-            raise ValueError("RRF parameter k must be non-negative.")
+        if not math.isfinite(k) or k < 0:
+            raise ValueError("RRF parameter k must be finite and non-negative.")
         self.k = k
 
     def fuse(
@@ -310,6 +343,9 @@ class ReciprocalRankFusion:
             raise ValueError("weights length must match ranked_lists length.")
 
         list_weights = list(weights) if weights is not None else [1.0] * len(ranked_lists)
+        if any(not math.isfinite(weight) or weight < 0.0 for weight in list_weights):
+            raise ValueError("RRF weights must be finite and non-negative.")
+
         rrf_scores: Dict[str, float] = {}
         best_rank: Dict[str, int] = {}
         merged: Dict[str, RetrievalResult] = {}
@@ -350,7 +386,8 @@ class ReciprocalRankFusion:
             key=lambda did: (-rrf_scores[did], best_rank[did], did),
         )
         if top_k is not None:
-            if top_k <= 0:
+            _validate_top_k(top_k)
+            if top_k == 0:
                 return []
             ordered_ids = ordered_ids[:top_k]
 
@@ -438,7 +475,10 @@ class CrossEncoderReRanker:
     ) -> float:
         """Compute cross-encoder relevance score for a (question, passage) pair."""
         if self.scorer is not None:
-            return float(self.scorer(question, passage))
+            score = float(self.scorer(question, passage))
+            if not math.isfinite(score):
+                raise ValueError("reranker scorer must return a finite score")
+            return score
 
         query_content = extract_content_tokens(question)
         if not query_content:
@@ -505,6 +545,8 @@ class CrossEncoderReRanker:
         top_k: Optional[int] = None,
     ) -> List[RetrievalResult]:
         """Re-rank candidate passages for the given question."""
+        if top_k is not None:
+            _validate_top_k(top_k)
         if not candidates:
             return []
 
@@ -560,7 +602,7 @@ class CrossEncoderReRanker:
 
         scored.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
         if top_k is not None:
-            if top_k <= 0:
+            if top_k == 0:
                 return []
             scored = scored[:top_k]
 
@@ -575,7 +617,16 @@ class AnswerGrounder:
     """Extracts citation-backed supporting sentences and computes groundedness."""
 
     def __init__(self, min_sentence_score: float = 0.05) -> None:
-        self.min_sentence_score = min_sentence_score
+        if (
+            isinstance(min_sentence_score, bool)
+            or not isinstance(min_sentence_score, (int, float))
+            or not math.isfinite(min_sentence_score)
+            or not 0.0 <= min_sentence_score <= 1.0
+        ):
+            raise ValueError(
+                "min_sentence_score must be a finite number between 0.0 and 1.0."
+            )
+        self.min_sentence_score = float(min_sentence_score)
 
     def _score_sentence(
         self,
@@ -679,35 +730,55 @@ class AnswerGrounder:
         answer: str,
         passages: Sequence[RetrievalResult],
     ) -> float:
-        """Score how well an answer's statements are supported by retrieved passages."""
+        """Score sentence support against the retrieved sources named by citations."""
         if not answer or not answer.strip() or not passages:
             return 0.0
 
-        clean_answer = _CITATION_TAG_RE.sub("", answer).strip()
-        sentences = split_sentences(clean_answer)
-        if not sentences:
-            return 0.0
-
-        passage_token_sets = [
-            (
-                set(extract_content_tokens(p.full_text)),
-                set(tokenize(p.full_text)),
-                set(make_bigrams(extract_content_tokens(p.full_text)))
-                | set(make_bigrams(tokenize(p.full_text))),
+        passage_by_id = {passage.doc_id: passage for passage in passages}
+        passage_token_sets = {
+            passage.doc_id: (
+                set(extract_content_tokens(passage.full_text)),
+                set(tokenize(passage.full_text)),
+                set(make_bigrams(extract_content_tokens(passage.full_text)))
+                | set(make_bigrams(tokenize(passage.full_text))),
             )
-            for p in passages
-        ]
+            for passage in passages
+        }
+
+        sentence_citations: List[tuple[str, set[str]]] = []
+        pending_citations: set[str] = set()
+        segments = re.split(r"(\[[^\]]+\])", answer)
+        for segment in segments:
+            citation_match = re.fullmatch(r"\[([^\]]+)\]", segment)
+            if citation_match:
+                if sentence_citations:
+                    sentence_citations[-1][1].add(citation_match.group(1))
+                else:
+                    pending_citations.add(citation_match.group(1))
+                continue
+
+            for sentence in split_sentences(segment):
+                sentence_citations.append((sentence, pending_citations))
+                pending_citations = set()
 
         sentence_scores: List[float] = []
-        for sentence in sentences:
+        for sentence, citation_ids in sentence_citations:
+            cited_passages = [
+                passage_token_sets[doc_id]
+                for doc_id in citation_ids
+                if doc_id in passage_by_id
+            ]
             s_content = extract_content_tokens(sentence)
             if not s_content:
                 continue
+            if not cited_passages:
+                sentence_scores.append(0.0)
+                continue
+
             s_unique = set(s_content)
             s_bigrams = make_bigrams(s_content)
-
             best_support = 0.0
-            for p_content_set, p_all_set, p_bigrams in passage_token_sets:
+            for p_content_set, p_all_set, p_bigrams in cited_passages:
                 token_cov = (
                     sum(1 for t in s_unique if t in p_content_set or t in p_all_set)
                     / len(s_unique)

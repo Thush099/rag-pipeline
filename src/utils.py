@@ -206,6 +206,9 @@ def normalize_corpus(corpus: Sequence[DocumentInput]) -> List[Document]:
             )
         else:
             raise TypeError(f"Unsupported corpus item type at index {idx}: {type(item)!r}")
+    doc_ids = [document.doc_id for document in normalized]
+    if len(doc_ids) != len(set(doc_ids)):
+        raise ValueError("Corpus documents must have unique document IDs.")
     return normalized
 
 

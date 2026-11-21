@@ -12,6 +12,7 @@ from src.models import (
     DenseRetriever,
     EmbeddingInput,
     ReciprocalRankFusion,
+    _validate_top_k,
 )
 from src.utils import DocumentInput, PipelineResult, RetrievalResult, normalize_corpus
 
@@ -54,9 +55,10 @@ class RAGPipeline:
     ) -> list[RetrievalResult]:
         """Retrieve ranked passages using bm25, dense, or hybrid (RRF + optional re-rank)."""
         k = self.config.top_k if top_k is None else top_k
+        _validate_top_k(k)
         active_mode = mode or self.config.mode
 
-        if k <= 0 or not self.documents or not question or not question.strip():
+        if k == 0 or not self.documents or not question or not question.strip():
             return []
 
         if active_mode == "bm25":

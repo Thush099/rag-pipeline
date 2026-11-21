@@ -72,3 +72,18 @@ def test_cross_encoder_reranker_idf_overlap_and_custom_callable() -> None:
     reranked = custom.re_rank(["plain text", "special passage"], "query")
     assert reranked[0].text == "special passage"
     assert reranked[0].rerank_score == pytest.approx(42.0)
+
+
+def test_rrf_rejects_non_finite_smoothing_constant() -> None:
+    for invalid_k in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            ReciprocalRankFusion(k=invalid_k)
+
+
+def test_rrf_rejects_negative_or_non_finite_weights() -> None:
+    results = [RetrievalResult(doc_id="d1", title="", text="doc", score=1.0, rank=1)]
+    fusion = ReciprocalRankFusion()
+
+    for invalid_weight in (-1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            fusion.fuse([results], weights=[invalid_weight])

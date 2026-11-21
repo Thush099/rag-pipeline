@@ -1,10 +1,28 @@
 """Unit tests for BM25Retriever and DenseRetriever."""
 
 import math
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from src.models import BM25Retriever, DenseRetriever
+from src.models import (
+    BM25Retriever,
+    CrossEncoderReRanker,
+    DenseRetriever,
+    ReciprocalRankFusion,
+    TfidfEmbeddingBackend,
+)
+from src.pipeline import RAGPipeline
+from src.utils import load_corpus
+
+SAMPLE_CORPUS = Path(__file__).resolve().parents[1] / "data" / "sample_corpus.jsonl"
+
+
+@pytest.mark.parametrize("invalid_k1", [float("nan"), float("inf")])
+def test_bm25_rejects_non_finite_k1(invalid_k1: float) -> None:
+    with pytest.raises(ValueError, match="k1 must be finite and non-negative"):
+        BM25Retriever([], k1=invalid_k1)
 
 
 def test_bm25_idf_ordering_rare_exceeds_common() -> None:
@@ -76,6 +94,113 @@ def test_dense_retriever_tfidf_cosine_and_l2_normalization() -> None:
     assert 0.0 < results[0].score <= 1.0 + 1e-6
 
 
+def test_dense_retriever_rejects_document_embeddings_with_wrong_row_count() -> None:
+    corpus = [
+        {"id": "d1", "title": "Alpha", "text": "first doc"},
+        {"id": "d2", "title": "Beta", "text": "second doc"},
+    ]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(2, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one embedding per document"):
+        DenseRetriever(corpus, embedding_backend=InvalidBackend())
+
+
+def test_dense_retriever_rejects_non_finite_document_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.array([[np.nan, 1.0]], dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(2, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="finite values"):
+        DenseRetriever(corpus, embedding_backend=InvalidBackend())
+
+
+def test_dense_retriever_rejects_duplicate_document_ids() -> None:
+    corpus = [
+        {"id": "duplicate", "title": "Alpha", "text": "first doc"},
+        {"id": "duplicate", "title": "Beta", "text": "second doc"},
+    ]
+
+    with pytest.raises(ValueError, match="unique document IDs"):
+        DenseRetriever(corpus)
+
+
+def test_dense_retriever_rejects_query_embedding_with_wrong_dimension() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones(3, dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="same dimension"):
+        retriever.get_scores("query")
+
+
+@pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), -float("inf")])
+def test_reranker_rejects_non_finite_custom_scores(invalid_score: float) -> None:
+    reranker = CrossEncoderReRanker(scorer=lambda _question, _passage: invalid_score)
+
+    with pytest.raises(ValueError, match="reranker scorer must return a finite score"):
+        reranker.re_rank(["a relevant passage"], "relevant")
+
+
+def test_callable_embedding_backend_rejects_multiple_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    def encoder(texts):
+        if len(texts) == 1 and texts[0] == "query":
+            return np.ones((2, 2), dtype=np.float32)
+        return np.ones((len(texts), 2), dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=encoder)
+    with pytest.raises(ValueError, match="one query embedding"):
+        retriever.get_scores("query")
+
+
+def test_dense_retriever_rejects_multiple_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.ones((2, 2), dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="one query embedding"):
+        retriever.get_scores("query")
+
+
+def test_dense_retriever_rejects_non_finite_query_embeddings() -> None:
+    corpus = [{"id": "d1", "title": "Alpha", "text": "first doc"}]
+
+    class InvalidBackend:
+        def encode_documents(self, texts):
+            return np.ones((1, 2), dtype=np.float32)
+
+        def encode_query(self, query: str):
+            return np.array([np.inf, 1.0], dtype=np.float32)
+
+    retriever = DenseRetriever(corpus, embedding_backend=InvalidBackend())
+    with pytest.raises(ValueError, match="finite values"):
+        retriever.get_scores("query")
+
+
 def test_dense_retriever_accepts_protocol_and_callable_backends() -> None:
     corpus = [
         {"id": "d1", "title": "Alpha", "text": "first doc"},
@@ -108,3 +233,104 @@ def test_dense_retriever_accepts_protocol_and_callable_backends() -> None:
     callable_results = callable_retriever.retrieve("semantic query", top_k=1)
     assert callable_results[0].doc_id == "d1"
     assert callable_results[0].score == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    "invalid_range",
+    [
+        (0, 2),
+        (2, 1),
+        (3, 2),
+        (1, 1.5),
+        (1, float("nan")),
+        (1,),
+        (1, 2, 3),
+        (True, 2),
+        "ab",
+        None,
+    ],
+)
+def test_tfidf_embedding_backend_rejects_invalid_ngram_range(invalid_range) -> None:
+    with pytest.raises(ValueError, match="ngram_range"):
+        TfidfEmbeddingBackend(ngram_range=invalid_range)
+
+
+def test_tfidf_embedding_backend_accepts_valid_ngram_range() -> None:
+    for valid in ((1, 2), (1, 1), (2, 3), [1, 2]):
+        matrix = TfidfEmbeddingBackend(ngram_range=valid).encode_documents(["alpha beta gamma"])
+        assert matrix.shape[0] == 1
+        assert matrix.shape[1] > 0
+
+
+def test_negative_top_k_rejected_at_every_public_boundary() -> None:
+    corpus = load_corpus(SAMPLE_CORPUS)
+    bm25 = BM25Retriever(corpus)
+    dense = DenseRetriever(corpus)
+
+    for retriever in (bm25, dense):
+        with pytest.raises(ValueError, match="top_k must be non-negative"):
+            retriever.retrieve("BM25", top_k=-1)
+
+    fusion = ReciprocalRankFusion()
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        fusion.fuse([bm25.retrieve("BM25", top_k=3)], top_k=-1)
+
+    reranker = CrossEncoderReRanker(corpus)
+    candidates = bm25.retrieve("BM25", top_k=3)
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        reranker.re_rank(candidates, "BM25", top_k=-1)
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        reranker.re_rank(candidates, "", top_k=-1)
+
+    pipeline = RAGPipeline(corpus)
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        pipeline.retrieve("BM25", top_k=-3)
+    with pytest.raises(ValueError, match="top_k must be non-negative"):
+        pipeline.run("BM25", top_k=-3)
+
+    # zero keeps its documented empty-result behavior
+    assert pipeline.retrieve("BM25", top_k=0) == []
+
+
+@pytest.mark.parametrize("bad_top_k", [True, False, 2.5, "3", float("nan")])
+def test_non_integer_top_k_rejected_at_every_public_boundary(bad_top_k) -> None:
+    """Booleans, floats, and strings must not silently truncate or crash slicing."""
+    corpus = load_corpus(SAMPLE_CORPUS)
+    bm25 = BM25Retriever(corpus)
+    dense = DenseRetriever(corpus)
+
+    for retriever in (bm25, dense):
+        with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+            retriever.retrieve("BM25", top_k=bad_top_k)
+
+    fusion = ReciprocalRankFusion()
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        fusion.fuse([bm25.retrieve("BM25", top_k=3)], top_k=bad_top_k)
+
+    reranker = CrossEncoderReRanker(corpus)
+    candidates = bm25.retrieve("BM25", top_k=3)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        reranker.re_rank(candidates, "BM25", top_k=bad_top_k)
+
+    pipeline = RAGPipeline(corpus)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        pipeline.retrieve("BM25", top_k=bad_top_k)
+
+
+def test_retrieve_rejects_none_top_k() -> None:
+    """Only fuse/re_rank accept None; retrievers require an explicit count."""
+    corpus = load_corpus(SAMPLE_CORPUS)
+    with pytest.raises(ValueError, match="top_k must be non-negative and an integer"):
+        BM25Retriever(corpus).retrieve("BM25", top_k=None)
+
+
+def test_optional_top_k_none_still_means_untruncated() -> None:
+    corpus = load_corpus(SAMPLE_CORPUS)
+    bm25 = BM25Retriever(corpus)
+    candidates = bm25.retrieve("BM25", top_k=3)
+
+    fusion = ReciprocalRankFusion()
+    assert len(fusion.fuse([candidates], top_k=None)) == len(candidates)
+
+    reranker = CrossEncoderReRanker(corpus)
+    assert len(reranker.re_rank(candidates, "BM25", top_k=None)) == len(candidates)
