@@ -95,3 +95,15 @@ rag-pipeline/
 ```bash
 pytest -v
 ```
+
+## Web UI
+
+A local workbench drives the real pipeline in the browser:
+
+```bash
+python ui/server.py            # http://127.0.0.1:8123
+```
+
+Ask a question, switch retrieval mode (bm25 / dense / hybrid), tune `top_k`, paste a
+custom JSONL corpus, and inspect the fused rankings, inline citations, and groundedness
+score. The server uses only the standard library and calls `RAGPipeline.run()`.
