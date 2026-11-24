@@ -105,9 +105,19 @@
   .cite-list { margin: 10px 0 0; padding: 0; list-style: none; }
   .cite-list li { padding: 8px 0; border-top: 1px dashed var(--rule); font-size: 14px; }
   .cite-list .tag { font: 12px var(--mono); color: var(--accent); margin-right: 8px; }
+  .skip-link {
+    position: absolute; left: -9999px; top: 0; z-index: 100;
+    background: var(--accent, #2b6cb0); color: #fff; padding: 10px 16px;
+    border-radius: 0 0 6px 0; font: 600 13px/1 var(--sans); text-decoration: none;
+  }
+  .skip-link:focus { left: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
 </style>
 </head>
 <body>
+<a class="skip-link" href="#form">Skip to controls</a>
 <header>
   <h1>Retrieval <em>workbench</em></h1>
   <p class="deck">Ask a question against a document corpus. Hybrid mode fuses BM25 and dense
@@ -115,7 +125,7 @@
   inline citations plus a groundedness score.</p>
 </header>
 
-<div class="layout">
+<main class="layout">
   <form class="panel" id="form">
     <h2>Query</h2>
     <p class="meta">Runs the real pipeline from <code>src/pipeline.py</code>.</p>
@@ -148,7 +158,7 @@
     <p class="hint">Leave empty to use the bundled sample corpus.</p>
 
     <button type="submit" id="run">Run pipeline</button>
-    <div class="error" id="error" hidden></div>
+    <div class="error" id="error" role="alert" hidden></div>
   </form>
 
   <section>
@@ -168,7 +178,7 @@
       <div id="results"></div>
     </div>
   </section>
-</div>
+</main>
 
 <script>
 (() => {
