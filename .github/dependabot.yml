@@ -5,3 +5,10 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # requirements.txt uses wide `>=` floors on purpose (maximum installability,
+    # CI verifies the newest resolvable versions). Dependabot's default
+    # "increase" strategy rewrites those floors to pin-minimums, which only
+    # narrows compatibility without unlocking anything. "widen" keeps the policy:
+    # no floor-bump PRs for versions the ranges already allow; security alerts
+    # and genuinely-needed range changes still arrive.
+    versioning-strategy: "widen"
