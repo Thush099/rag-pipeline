@@ -23,6 +23,8 @@ Grounded Answer ◄── AnswerGrounder ([doc_id] Citations) ◄── CrossEnc
 
 ## Installation
 
+Requires Python 3.11+ (CI runs the suite on 3.11 and 3.12, covering both the numpy 2.4 and 2.5 lines).
+
 ```bash
 pip install -r requirements.txt
 ```
