@@ -1,5 +1,7 @@
 # RAG Pipeline
 
+[![CI](https://github.com/Thush099/rag-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Thush099/rag-pipeline/actions/workflows/ci.yml)
+
 A modular, offline-ready hybrid Retrieval-Augmented Generation (RAG) pipeline combining Okapi BM25 sparse retrieval, dense vector cosine retrieval, Reciprocal Rank Fusion (RRF), cross-encoder re-ranking, and citation-grounded answer extraction.
 
 ## Features
