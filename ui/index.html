@@ -18,6 +18,21 @@
     --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
     --sans: "Avenir Next", "Segoe UI", system-ui, sans-serif;
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #1d1a15;
+      --card: #272219;
+      --ink: #ece5d5;
+      --ink-soft: #a99d86;
+      --rule: #413a2c;
+      --accent: #d98b72;
+      --accent-soft: #43291f;
+      --ok: #7cc3a0;
+    }
+    textarea, input[type="number"], select { background: #211d16; }
+    header { background: linear-gradient(180deg, #29241a, var(--paper)); }
+    button:hover { background: #a8523b; }
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--paper); color: var(--ink);
@@ -63,6 +78,22 @@
   button:hover { background: #77301f; }
   button:disabled { background: var(--ink-soft); cursor: wait; }
   .hint { font-size: 13px; color: var(--ink-soft); margin: 8px 0 0; }
+  .spinner {
+    display: inline-block; width: 1em; height: 1em; margin-left: 8px;
+    border: 2px solid var(--rule); border-top-color: var(--accent);
+    border-radius: 50%; vertical-align: -0.15em;
+    animation: spin 0.8s linear infinite;
+  }
+  .spinner[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+  }
+  .empty-state {
+    padding: 14px 16px; border: 1px dashed var(--rule); border-radius: 3px;
+    color: var(--ink-soft); font-size: 14.5px;
+  }
+  .empty-state strong { color: var(--ink); }
   .error {
     margin-top: 14px; padding: 11px 13px; border-left: 3px solid var(--accent);
     background: var(--accent-soft); color: var(--accent); font-size: 14px;
@@ -158,6 +189,7 @@
     <p class="hint">Leave empty to use the bundled sample corpus.</p>
 
     <button type="submit" id="run">Run pipeline</button>
+    <span class="spinner" hidden aria-hidden="true"></span>
     <div class="error" id="error" role="alert" hidden></div>
   </form>
 
@@ -173,6 +205,10 @@
     </div>
 
     <div class="panel" id="results-panel" hidden>
+      <div class="empty-state" id="empty-state" hidden>
+        <strong>No passages matched.</strong> Try a broader question, raise top-k, or add
+        more documents to the corpus.
+      </div>
       <h2>Retrieved passages</h2>
       <p class="meta" id="results-meta"></p>
       <div id="results"></div>
@@ -206,6 +242,7 @@
 
   function renderResults(result) {
     const rows = result.results || [];
+    $("empty-state").hidden = rows.length > 0;
     const max = Math.max(...rows.map(r => r.score), 1e-9);
     $("results-meta").textContent =
       `mode ${result.mode} · ${rows.length} passage${rows.length === 1 ? "" : "s"} ranked by fused score`;
@@ -253,6 +290,9 @@
     e.preventDefault();
     const btn = $("run");
     btn.disabled = true; btn.textContent = "Running…";
+    btn.form.setAttribute("aria-busy", "true");
+    const spinner = document.querySelector(".spinner");
+    spinner.hidden = false;
     $("error").hidden = true;
     try {
       const res = await fetch("/api/query", {
@@ -282,6 +322,8 @@
       $("error").hidden = false;
     } finally {
       btn.disabled = false; btn.textContent = "Run pipeline";
+      btn.form.setAttribute("aria-busy", "false");
+      spinner.hidden = true;
     }
   });
 })();

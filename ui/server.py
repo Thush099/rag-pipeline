@@ -8,8 +8,11 @@ dependencies. Start with ``python ui/server.py`` and open the printed URL.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+import threading
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -26,6 +29,68 @@ INDEX_HTML = (REPO_ROOT / "ui" / "index.html").read_text(encoding="utf-8")
 
 MODES: tuple[RetrievalMode, ...] = ("bm25", "dense", "hybrid")
 MAX_CORPUS_BYTES = 1_000_000
+
+# Building a pipeline embeds the whole corpus, so queries against the same corpus
+# must reuse the built index instead of re-embedding it per request. The cache is
+# bounded: oldest entries are evicted so long-running servers stay memory-flat.
+MAX_CACHED_PIPELINES = 4
+_PIPELINE_CACHE: "OrderedDict[str, RAGPipeline]" = OrderedDict()
+_PIPELINE_CACHE_LOCK = threading.Lock()
+_PIPELINE_CACHE_STATS = {"hits": 0, "misses": 0}
+
+
+def clear_pipeline_cache() -> None:
+    """Reset the shared index cache (used by tests and long-lived reloads)."""
+    with _PIPELINE_CACHE_LOCK:
+        _PIPELINE_CACHE.clear()
+        _PIPELINE_CACHE_STATS["hits"] = 0
+        _PIPELINE_CACHE_STATS["misses"] = 0
+
+
+def pipeline_cache_size() -> int:
+    """Number of indexed corpora currently held in memory."""
+    with _PIPELINE_CACHE_LOCK:
+        return len(_PIPELINE_CACHE)
+
+
+def pipeline_cache_stats() -> dict[str, int]:
+    """Observable cache counters for the health endpoint."""
+    with _PIPELINE_CACHE_LOCK:
+        return {
+            "entries": len(_PIPELINE_CACHE),
+            "max": MAX_CACHED_PIPELINES,
+            "hits": _PIPELINE_CACHE_STATS["hits"],
+            "misses": _PIPELINE_CACHE_STATS["misses"],
+        }
+
+
+def _pipeline_cache_key(corpus: Sequence[dict[str, Any]], config: RAGPipelineConfig) -> str:
+    # Only index-affecting inputs belong in the key: the corpus plus the BM25
+    # statistics. Mode, top_k, and the re-ranker flag are per-query choices.
+    digest = hashlib.sha256()
+    digest.update(json.dumps(corpus, sort_keys=True, default=str).encode("utf-8"))
+    digest.update(f"|{config.bm25_k1}|{config.bm25_b}".encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _get_pipeline(corpus: Sequence[dict[str, Any]], config: RAGPipelineConfig) -> RAGPipeline:
+    key = _pipeline_cache_key(corpus, config)
+    with _PIPELINE_CACHE_LOCK:
+        cached = _PIPELINE_CACHE.get(key)
+        if cached is not None:
+            _PIPELINE_CACHE.move_to_end(key)
+            _PIPELINE_CACHE_STATS["hits"] += 1
+            return cached
+        _PIPELINE_CACHE_STATS["misses"] += 1
+    # Build outside the lock: embedding a corpus is slow, and two threads racing
+    # to index the same corpus only duplicate work — results stay correct.
+    pipeline = RAGPipeline(corpus, config=config)
+    with _PIPELINE_CACHE_LOCK:
+        _PIPELINE_CACHE[key] = pipeline
+        _PIPELINE_CACHE.move_to_end(key)
+        while len(_PIPELINE_CACHE) > MAX_CACHED_PIPELINES:
+            _PIPELINE_CACHE.popitem(last=False)
+    return pipeline
 
 
 def run_query(
@@ -70,7 +135,7 @@ def run_query(
         top_k=top_k,
         use_cross_encoder_re_ranker=use_cross_encoder_re_ranker,
     )
-    pipeline = RAGPipeline(corpus, config=config)
+    pipeline = _get_pipeline(corpus, config)
     return pipeline.run(question, top_k=top_k, mode=mode).to_dict()
 
 
@@ -98,7 +163,13 @@ def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
                 self.end_headers()
                 self.wfile.write(body)
             elif self.path == "/api/health":
-                self._send_json({"status": "ok", "modes": list(MODES)})
+                self._send_json(
+                    {
+                        "status": "ok",
+                        "modes": list(MODES),
+                        "pipeline_cache": pipeline_cache_stats(),
+                    }
+                )
             else:
                 self._send_json({"error": f"unknown path: {self.path}"}, status=404)
 
