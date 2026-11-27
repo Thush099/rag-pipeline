@@ -111,3 +111,11 @@ python ui/server.py            # http://127.0.0.1:8123
 Ask a question, switch retrieval mode (bm25 / dense / hybrid), tune `top_k`, paste a
 custom JSONL corpus, and inspect the fused rankings, inline citations, and groundedness
 score. The server uses only the standard library and calls `RAGPipeline.run()`.
+
+**Mode compare** — tick *Compare retriever modes* to answer the same question through
+bm25, dense, and hybrid at once. The per-mode rank matrix plus a hybrid-ordered union
+table makes the RRF fusion directly inspectable (a doc ranked #1 by both retrievers can
+drop below the top of the fused list — the table shows exactly where and why).
+
+Corpus indexes are cached per corpus in a bounded LRU (repeated questions reuse the
+index instead of rebuilding it), and `GET /api/health` reports cache hit/miss stats.
