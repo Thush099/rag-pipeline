@@ -139,6 +139,9 @@ def run_query(
     return pipeline.run(question, top_k=top_k, mode=mode).to_dict()
 
 
+MAX_REQUEST_BYTES = 4_000_000
+
+
 def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
     """Create (but do not start) the UI HTTP server bound to ``host:port``."""
 
@@ -179,6 +182,12 @@ def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
+                if length > MAX_REQUEST_BYTES:
+                    self._send_json(
+                        {"error": f"request body exceeds {MAX_REQUEST_BYTES} bytes"},
+                        status=413,
+                    )
+                    return
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be a JSON object")
