@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
             "threshold in [0, 1], so the pipeline can gate a CI job."
         ),
     )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Rank the question through bm25, dense, and hybrid and print a per-mode rank matrix.",
+    )
     return parser
 
 
@@ -132,10 +137,34 @@ def format_report(output: PipelineResult) -> str:
     return "\n".join(lines)
 
 
+def format_compare(matrix: dict) -> str:
+    """Render a per-mode rank matrix as an aligned text table."""
+    headers = ("doc_id", "bm25", "dense", "hybrid")
+
+    def cell(rank: Optional[int]) -> str:
+        return "-" if rank is None else str(rank)
+
+    table = [
+        (u["doc_id"], cell(u["bm25_rank"]), cell(u["dense_rank"]), cell(u["hybrid_rank"]))
+        for u in matrix["union"]
+    ]
+    widths = [max([len(headers[i])] + [len(r[i]) for r in table]) for i in range(4)]
+    lines = [
+        "Per-mode ranks for the same question (- = outside that mode's top-k; ordered by hybrid rank):",
+        "",
+        "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)),
+        "  ".join("-" * widths[i] for i in range(4)),
+    ]
+    lines.extend("  ".join(r[i].ljust(widths[i]) for i in range(4)) for r in table)
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Execute the RAG pipeline CLI."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.compare and args.min_groundedness is not None:
+        parser.error("--min-groundedness gates an answer; --compare produces none")
 
     corpus = load_corpus(args.corpus)
     config = RAGPipelineConfig(
@@ -145,6 +174,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         use_cross_encoder_re_ranker=not args.no_rerank,
     )
     pipeline = RAGPipeline(corpus=corpus, config=config)
+    if args.compare:
+        matrix = pipeline.compare(args.question, top_k=args.top_k)
+        if args.json_output:
+            print(json.dumps({"question": args.question, "top_k": args.top_k, **matrix}, indent=2))
+        else:
+            print(format_compare(matrix))
+        return 0
     rerank_flag = False if args.no_rerank else None
     result = pipeline.run(
         question=args.question,

@@ -142,49 +142,8 @@ def run_compare(
         use_cross_encoder_re_ranker=True,
     )
     pipeline = _get_pipeline(corpus, config)
-
-    modes: dict[str, list[dict[str, Any]]] = {}
-    for mode in MODES:
-        rows = [
-            {
-                "rank": i,
-                "doc_id": row["doc_id"],
-                "title": row.get("title") or row["doc_id"],
-                "score": row["score"],
-            }
-            for i, row in enumerate(
-                pipeline.run(question, top_k=top_k, mode=mode).to_dict()["results"], start=1
-            )
-        ]
-        modes[mode] = rows
-
-    by_mode = {mode: {row["doc_id"]: row for row in rows} for mode, rows in modes.items()}
-    order: list[str] = []
-    seen: set[str] = set()
-    for mode in ("hybrid", "bm25", "dense"):
-        for row in modes[mode]:
-            if row["doc_id"] not in seen:
-                seen.add(row["doc_id"])
-                order.append(row["doc_id"])
-
-    union: list[dict[str, Any]] = []
-    for doc_id in order:
-        entry: dict[str, Any] = {
-            "doc_id": doc_id,
-            "title": None,
-            "bm25_rank": None,
-            "dense_rank": None,
-            "hybrid_rank": None,
-        }
-        for mode in MODES:
-            row = by_mode[mode].get(doc_id)
-            if row is not None:
-                entry[f"{mode}_rank"] = row["rank"]
-                if entry["title"] is None:
-                    entry["title"] = row["title"]
-        union.append(entry)
-
-    return {"question": question, "top_k": top_k, "modes": modes, "union": union}
+    matrix = pipeline.compare(question, top_k=top_k)
+    return {"question": question, "top_k": top_k, **matrix}
 
 
 def run_query(

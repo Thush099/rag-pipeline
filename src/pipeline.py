@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from config import RAGPipelineConfig, RetrievalMode
 from src.models import (
@@ -94,6 +94,61 @@ class RAGPipeline:
             return reranked[:k]
 
         return candidates[:k]
+
+    def compare(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Answer one question through every retriever mode and build a rank matrix.
+
+        Returns per-mode dense-ordinal rank rows plus a union table ordered by
+        hybrid rank; each union row carries every mode's rank (None outside that
+        mode's top-k) so the RRF fusion is inspectable.
+        """
+        active_top_k = top_k if top_k is not None else self.config.top_k
+        modes: dict[str, list[dict[str, Any]]] = {}
+        for mode in ("bm25", "dense", "hybrid"):
+            rows = [
+                {
+                    "rank": i,
+                    "doc_id": row["doc_id"],
+                    "title": row.get("title") or row["doc_id"],
+                    "score": row["score"],
+                }
+                for i, row in enumerate(
+                    self.run(question, top_k=active_top_k, mode=mode).to_dict()["results"],
+                    start=1,
+                )
+            ]
+            modes[mode] = rows
+
+        by_mode = {mode: {row["doc_id"]: row for row in rows} for mode, rows in modes.items()}
+        order: list[str] = []
+        seen: set[str] = set()
+        for mode in ("hybrid", "bm25", "dense"):
+            for row in modes[mode]:
+                if row["doc_id"] not in seen:
+                    seen.add(row["doc_id"])
+                    order.append(row["doc_id"])
+
+        union: list[dict[str, Any]] = []
+        for doc_id in order:
+            entry: dict[str, Any] = {
+                "doc_id": doc_id,
+                "title": None,
+                "bm25_rank": None,
+                "dense_rank": None,
+                "hybrid_rank": None,
+            }
+            for mode in ("bm25", "dense", "hybrid"):
+                row = by_mode[mode].get(doc_id)
+                if row is not None:
+                    entry[f"{mode}_rank"] = row["rank"]
+                    if entry["title"] is None:
+                        entry["title"] = row["title"]
+            union.append(entry)
+        return {"modes": modes, "union": union}
 
     def run(
         self,

@@ -47,6 +47,7 @@ Supported CLI options:
 - `--top-k` / `--top_k`: Number of top passages to return (default: `5`; must be a non-negative integer — booleans, floats, and strings are rejected at every public `top_k` boundary)
 - `--no-rerank`: Disable `CrossEncoderReRanker`
 - `--json`: Print structured JSON output
+- `--compare`: Rank the question through `bm25`, `dense`, and `hybrid` and print a per-mode rank matrix (doc_id × mode, ordered by hybrid rank), exposing the RRF fusion directly. Works with `--json`; conflicts with `--min-groundedness` (compare produces no answer to gate).
 - `--min-groundedness FLOAT`: Exit non-zero when the answer's groundedness score is below `FLOAT`, so the pipeline can gate a CI job (e.g. `python main.py --min-groundedness 0.6`). The value must be finite and in `[0, 1]`; invalid values are rejected rather than silently disabling the gate.
 
 ### Sample CLI Output
