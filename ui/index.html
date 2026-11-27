@@ -260,6 +260,12 @@
 
   function renderCompare(payload) {
     const rows = payload.union || [];
+    if (rows.length === 0) {
+      $("compare-rows").innerHTML = '<tr><td colspan="4" class="empty-state">'
+        + '<strong>No passages matched in any mode.</strong> Try a broader question or add documents to the corpus.'
+        + '</td></tr>';
+      return;
+    }
     $("compare-rows").innerHTML = rows.map((u) => {
       const cell = (rank) => (rank == null ? "—" : `<b>${rank}</b>`);
       return `<tr><td>${escapeHtml(u.title || u.doc_id)}</td>`
