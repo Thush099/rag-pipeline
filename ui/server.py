@@ -93,6 +93,100 @@ def _get_pipeline(corpus: Sequence[dict[str, Any]], config: RAGPipelineConfig) -
     return pipeline
 
 
+def _validate_question(question: str) -> None:
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("question must be a non-empty string")
+
+
+def _validate_top_k(top_k: int) -> None:
+    if isinstance(top_k, bool) or not isinstance(top_k, int):
+        raise ValueError(f"top_k must be an integer, got {top_k!r}")
+    if top_k < 0:
+        raise ValueError(f"top_k must be non-negative, got {top_k}")
+
+
+def _resolve_corpus(corpus_jsonl: Optional[str]) -> Sequence[dict[str, Any]]:
+    if corpus_jsonl is None:
+        return load_corpus(REPO_ROOT / "data" / "sample_corpus.jsonl")
+    if len(corpus_jsonl.encode("utf-8")) > MAX_CORPUS_BYTES:
+        raise ValueError(f"corpus exceeds {MAX_CORPUS_BYTES} bytes")
+    records = []
+    for line_no, line in enumerate(corpus_jsonl.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            records.append(json.loads(stripped))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"corpus line {line_no} is not valid JSON: {exc}") from exc
+    return normalize_corpus(records)
+
+
+def run_compare(
+    question: str,
+    top_k: int = 5,
+    corpus_jsonl: Optional[str] = None,
+) -> dict[str, Any]:
+    """Answer one question through every retriever mode and return a rank matrix.
+
+    Shows how bm25, dense, and hybrid each rank the same corpus so the RRF
+    fusion is inspectable. The union table is ordered by hybrid rank and
+    carries each mode's rank per document (None outside that mode's top-k).
+    """
+    _validate_question(question)
+    _validate_top_k(top_k)
+    corpus = _resolve_corpus(corpus_jsonl)
+    config = RAGPipelineConfig(
+        mode="hybrid",
+        top_k=top_k,
+        use_cross_encoder_re_ranker=True,
+    )
+    pipeline = _get_pipeline(corpus, config)
+
+    modes: dict[str, list[dict[str, Any]]] = {}
+    for mode in MODES:
+        rows = [
+            {
+                "rank": i,
+                "doc_id": row["doc_id"],
+                "title": row.get("title") or row["doc_id"],
+                "score": row["score"],
+            }
+            for i, row in enumerate(
+                pipeline.run(question, top_k=top_k, mode=mode).to_dict()["results"], start=1
+            )
+        ]
+        modes[mode] = rows
+
+    by_mode = {mode: {row["doc_id"]: row for row in rows} for mode, rows in modes.items()}
+    order: list[str] = []
+    seen: set[str] = set()
+    for mode in ("hybrid", "bm25", "dense"):
+        for row in modes[mode]:
+            if row["doc_id"] not in seen:
+                seen.add(row["doc_id"])
+                order.append(row["doc_id"])
+
+    union: list[dict[str, Any]] = []
+    for doc_id in order:
+        entry: dict[str, Any] = {
+            "doc_id": doc_id,
+            "title": None,
+            "bm25_rank": None,
+            "dense_rank": None,
+            "hybrid_rank": None,
+        }
+        for mode in MODES:
+            row = by_mode[mode].get(doc_id)
+            if row is not None:
+                entry[f"{mode}_rank"] = row["rank"]
+                if entry["title"] is None:
+                    entry["title"] = row["title"]
+        union.append(entry)
+
+    return {"question": question, "top_k": top_k, "modes": modes, "union": union}
+
+
 def run_query(
     question: str,
     mode: str = "hybrid",
@@ -105,30 +199,12 @@ def run_query(
     Raises ValueError with a clear message for invalid inputs, matching the
     CLI's boundary validation.
     """
-    if not isinstance(question, str) or not question.strip():
-        raise ValueError("question must be a non-empty string")
+    _validate_question(question)
     if mode not in MODES:
         raise ValueError(f"mode must be one of {list(MODES)}, got {mode!r}")
-    if isinstance(top_k, bool) or not isinstance(top_k, int):
-        raise ValueError(f"top_k must be an integer, got {top_k!r}")
-    if top_k < 0:
-        raise ValueError(f"top_k must be non-negative, got {top_k}")
+    _validate_top_k(top_k)
 
-    if corpus_jsonl is None:
-        corpus = load_corpus(REPO_ROOT / "data" / "sample_corpus.jsonl")
-    else:
-        if len(corpus_jsonl.encode("utf-8")) > MAX_CORPUS_BYTES:
-            raise ValueError(f"corpus exceeds {MAX_CORPUS_BYTES} bytes")
-        records = []
-        for line_no, line in enumerate(corpus_jsonl.splitlines(), start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                records.append(json.loads(stripped))
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"corpus line {line_no} is not valid JSON: {exc}") from exc
-        corpus = normalize_corpus(records)
+    corpus = _resolve_corpus(corpus_jsonl)
 
     config = RAGPipelineConfig(
         mode=mode,
@@ -177,7 +253,7 @@ def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
                 self._send_json({"error": f"unknown path: {self.path}"}, status=404)
 
         def do_POST(self) -> None:
-            if self.path != "/api/query":
+            if self.path not in ("/api/query", "/api/compare"):
                 self._send_json({"error": f"unknown path: {self.path}"}, status=404)
                 return
             try:
@@ -191,7 +267,15 @@ def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be a JSON object")
-                result = run_query(
+                question = payload.get("question", "")
+                if self.path == "/api/compare":
+                    result = run_compare(
+                        question=question,
+                        top_k=payload.get("top_k", 5),
+                        corpus_jsonl=payload.get("corpus_jsonl"),
+                    )
+                else:
+                    result = run_query(
                     question=payload.get("question", ""),
                     mode=payload.get("mode", "hybrid"),
                     top_k=payload.get("top_k", 5),

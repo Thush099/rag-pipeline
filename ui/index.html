@@ -94,6 +94,10 @@
     color: var(--ink-soft); font-size: 14.5px;
   }
   .empty-state strong { color: var(--ink); }
+  .compare-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+  .compare-table th, .compare-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
+  .compare-table th { font: 600 11px/1 var(--sans); letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); }
+  .compare-table td:not(:first-child) { text-align: center; font-variant-numeric: tabular-nums; }
   .error {
     margin-top: 14px; padding: 11px 13px; border-left: 3px solid var(--accent);
     background: var(--accent-soft); color: var(--accent); font-size: 14px;
@@ -184,6 +188,11 @@
       <span>Re-rank candidates with the cross-encoder</span>
     </label>
 
+    <label class="switch">
+      <input type="checkbox" id="compare">
+      <span>Compare retriever modes (bm25 · dense · hybrid rank matrix)</span>
+    </label>
+
     <label for="corpus">Custom corpus (JSONL — optional)</label>
     <textarea id="corpus" placeholder='{"doc_id": "d1", "title": "…", "text": "…"}'></textarea>
     <p class="hint">Leave empty to use the bundled sample corpus.</p>
@@ -194,6 +203,15 @@
   </form>
 
   <section>
+    <div class="panel" id="compare-panel" hidden>
+      <div class="what">How each retriever ranks the same question. “—” means the doc fell
+      outside that mode's top-k. The union table is ordered by hybrid rank.</div>
+      <table class="compare-table">
+        <thead><tr><th>Document</th><th>bm25 rank</th><th>dense rank</th><th>hybrid rank</th></tr></thead>
+        <tbody id="compare-rows"></tbody>
+      </table>
+    </div>
+
     <div class="panel" id="verdict" hidden>
       <div class="verdict">
         <div class="score" id="score">—</div>
@@ -238,6 +256,15 @@
       html = html.replace(new RegExp(`\\[${doc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`, "g"), marker);
     });
     $("answer").innerHTML = html;
+  }
+
+  function renderCompare(payload) {
+    const rows = payload.union || [];
+    $("compare-rows").innerHTML = rows.map((u) => {
+      const cell = (rank) => (rank == null ? "—" : `<b>${rank}</b>`);
+      return `<tr><td>${escapeHtml(u.title || u.doc_id)}</td>`
+        + `<td>${cell(u.bm25_rank)}</td><td>${cell(u.dense_rank)}</td><td>${cell(u.hybrid_rank)}</td></tr>`;
+    }).join("");
   }
 
   function renderResults(result) {
@@ -295,10 +322,15 @@
     spinner.hidden = false;
     $("error").hidden = true;
     try {
-      const res = await fetch("/api/query", {
+      const compare = $("compare").checked;
+      const res = await fetch(compare ? "/api/compare" : "/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(compare ? {
+          question: $("question").value,
+          top_k: Number($("top_k").value),
+          corpus_jsonl: $("corpus").value.trim() || null,
+        } : {
           question: $("question").value,
           mode: $("mode").value,
           top_k: Number($("top_k").value),
@@ -308,6 +340,13 @@
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || `Request failed (${res.status})`);
+      if (compare) {
+        renderCompare(payload);
+        $("compare-panel").hidden = false;
+        $("verdict").hidden = true;
+        $("results-panel").hidden = true;
+        return;
+      }
       const g = payload.grounded;
       const scoreEl = $("score");
       scoreEl.textContent = `${(100 * g.groundedness_score).toFixed(1)}%`;

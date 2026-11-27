@@ -191,3 +191,70 @@ def test_oversized_declared_body_is_rejected_not_hung(server):
         )
         first = sock.recv(4096).split(b"\r\n", 1)[0]
     assert b"413" in first, f"expected 413 for oversized body, got {first!r}"
+
+
+# --- mode comparison: see how bm25, dense, and hybrid rank the same question ---
+
+COMPARE_CORPUS = "\n".join(
+    [
+        '{"doc_id": "c1", "title": "Cats", "text": "cats are small domesticated felines"}',
+        '{"doc_id": "c2", "title": "Dogs", "text": "dogs are loyal domesticated animals"}',
+        '{"doc_id": "c3", "title": "Felines", "text": "the feline family includes cats and lions"}',
+    ]
+)
+
+
+def test_compare_endpoint_returns_per_mode_rank_matrix(server):
+    """POST /api/compare answers one question through all three retriever modes."""
+    req = urllib.request.Request(
+        server + "/api/compare",
+        data=json.dumps({"question": "cats", "top_k": 3, "corpus_jsonl": COMPARE_CORPUS}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    payload = json.loads(urllib.request.urlopen(req).read())
+    assert set(payload["modes"]) == {"bm25", "dense", "hybrid"}
+    for mode, rows in payload["modes"].items():
+        assert rows, f"{mode} returned no rows"
+        for rank, row in enumerate(rows, start=1):
+            assert row["rank"] == rank, f"{mode} ranks must be dense ordinals"
+            assert "doc_id" in row and "score" in row
+    union = payload["union"]
+    seen = {r["doc_id"] for rows in payload["modes"].values() for r in rows}
+    assert {u["doc_id"] for u in union} == seen, "union must cover every doc seen in any mode"
+    hybrid_order = [u["doc_id"] for u in union if u["hybrid_rank"] is not None]
+    assert hybrid_order == sorted(hybrid_order, key=lambda d: next(
+        u["hybrid_rank"] for u in union if u["doc_id"] == d
+    )), "union must be ordered by hybrid rank"
+    by_id = {u["doc_id"]: u for u in union}
+    assert by_id["c1"]["bm25_rank"] is not None and by_id["c1"]["bm25_rank"] <= 2, \
+        "exact-term doc c1 must rank in bm25's top-2"
+    assert {"bm25_rank", "dense_rank", "hybrid_rank"} <= set(union[0])
+
+
+def test_compare_reuses_the_cached_index(monkeypatch):
+    """Comparing modes must reuse one built index - three runs, one build."""
+    import ui.server as server_mod
+
+    server_mod.clear_pipeline_cache()
+    built = []
+    real_pipeline = server_mod.RAGPipeline
+
+    class CountingPipeline(real_pipeline):
+        def __init__(self, *args, **kwargs):
+            built.append(1)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(server_mod, "RAGPipeline", CountingPipeline)
+    try:
+        server_mod.run_compare("cats", top_k=3, corpus_jsonl=COMPARE_CORPUS)
+        server_mod.run_compare("dogs", top_k=3, corpus_jsonl=COMPARE_CORPUS)
+        assert len(built) == 1, f"expected 1 index build for 2 compares, built {len(built)}"
+    finally:
+        server_mod.clear_pipeline_cache()
+
+
+def test_index_has_compare_controls(server):
+    """The page exposes the mode-compare control and its results table."""
+    html = urllib.request.urlopen(server + "/").read().decode("utf-8")
+    assert 'id="compare"' in html, "missing compare-modes toggle"
+    assert 'id="compare-panel"' in html, "missing comparison results panel"
