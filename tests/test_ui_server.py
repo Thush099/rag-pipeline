@@ -258,3 +258,10 @@ def test_index_has_compare_controls(server):
     html = urllib.request.urlopen(server + "/").read().decode("utf-8")
     assert 'id="compare"' in html, "missing compare-modes toggle"
     assert 'id="compare-panel"' in html, "missing comparison results panel"
+
+
+def test_index_disables_heuristic_caching(server):
+    """The UI shell must not be heuristically cached — stale HTML after edits was
+    observed live because custom do_GET handlers send no cache validators."""
+    resp = urllib.request.urlopen(server + "/")
+    assert resp.headers.get("Cache-Control") == "no-cache"
