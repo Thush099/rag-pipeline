@@ -1,5 +1,7 @@
 # RAG Pipeline
 
+[![CI](https://github.com/Thush099/rag-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Thush099/rag-pipeline/actions/workflows/ci.yml)
+
 A modular, offline-ready hybrid Retrieval-Augmented Generation (RAG) pipeline combining Okapi BM25 sparse retrieval, dense vector cosine retrieval, Reciprocal Rank Fusion (RRF), cross-encoder re-ranking, and citation-grounded answer extraction.
 
 ## Features
@@ -23,6 +25,8 @@ Grounded Answer ◄── AnswerGrounder ([doc_id] Citations) ◄── CrossEnc
 
 ## Installation
 
+Requires Python 3.11+ (CI runs the suite on 3.11 and 3.12, covering both the numpy 2.4 and 2.5 lines).
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -43,6 +47,7 @@ Supported CLI options:
 - `--top-k` / `--top_k`: Number of top passages to return (default: `5`; must be a non-negative integer — booleans, floats, and strings are rejected at every public `top_k` boundary)
 - `--no-rerank`: Disable `CrossEncoderReRanker`
 - `--json`: Print structured JSON output
+- `--compare`: Rank the question through `bm25`, `dense`, and `hybrid` and print a per-mode rank matrix (doc_id × mode, ordered by hybrid rank), exposing the RRF fusion directly. Works with `--json`; conflicts with `--min-groundedness` (compare produces no answer to gate).
 - `--min-groundedness FLOAT`: Exit non-zero when the answer's groundedness score is below `FLOAT`, so the pipeline can gate a CI job (e.g. `python main.py --min-groundedness 0.6`). The value must be finite and in `[0, 1]`; invalid values are rejected rather than silently disabling the gate.
 
 ### Sample CLI Output
@@ -95,3 +100,23 @@ rag-pipeline/
 ```bash
 pytest -v
 ```
+
+## Web UI
+
+A local workbench drives the real pipeline in the browser:
+
+```bash
+python ui/server.py            # http://127.0.0.1:8123
+```
+
+Ask a question, switch retrieval mode (bm25 / dense / hybrid), tune `top_k`, paste a
+custom JSONL corpus, and inspect the fused rankings, inline citations, and groundedness
+score. The server uses only the standard library and calls `RAGPipeline.run()`.
+
+**Mode compare** — tick *Compare retriever modes* to answer the same question through
+bm25, dense, and hybrid at once. The per-mode rank matrix plus a hybrid-ordered union
+table makes the RRF fusion directly inspectable (a doc ranked #1 by both retrievers can
+drop below the top of the fused list — the table shows exactly where and why).
+
+Corpus indexes are cached per corpus in a bounded LRU (repeated questions reuse the
+index instead of rebuilding it), and `GET /api/health` reports cache hit/miss stats.

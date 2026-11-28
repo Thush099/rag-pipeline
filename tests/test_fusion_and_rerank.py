@@ -87,3 +87,16 @@ def test_rrf_rejects_negative_or_non_finite_weights() -> None:
     for invalid_weight in (-1.0, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="finite and non-negative"):
             fusion.fuse([results], weights=[invalid_weight])
+
+
+def test_fusion_zero_top_k_and_blank_question_rerank_contracts() -> None:
+    ranked = [
+        RetrievalResult(doc_id="a", title="A", text="alpha", score=8.0, rank=1, source="bm25", bm25_score=8.0),
+        RetrievalResult(doc_id="b", title="B", text="beta", score=6.0, rank=2, source="bm25", bm25_score=6.0),
+    ]
+    rrf = ReciprocalRankFusion(k=60)
+    assert rrf.fuse([ranked], top_k=0) == [], "top_k=0 fuses to nothing"
+
+    reranker = CrossEncoderReRanker()
+    out = reranker.re_rank(ranked, question="", top_k=2)
+    assert [r.doc_id for r in out] == ["a", "b"], "a blank question keeps candidate order"

@@ -334,3 +334,45 @@ def test_optional_top_k_none_still_means_untruncated() -> None:
 
     reranker = CrossEncoderReRanker(corpus)
     assert len(reranker.re_rank(candidates, "BM25", top_k=None)) == len(candidates)
+
+
+def test_tfidf_unfittable_tokenization_and_blank_query_contracts() -> None:
+    """Single-character-only text produces an empty feature space (documented, not a
+    crash), unfitted queries encode to a zero-width vector, and a blank query on a
+    fitted backend encodes to the zero vector at the model width."""
+    from src.models import TfidfEmbeddingBackend
+
+    emb = TfidfEmbeddingBackend()
+    out = emb.encode_documents([""])
+    assert out.shape == (1, 0), "an unfittable tokenization yields an empty feature space"
+    assert emb.encode_query("anything").shape == (0,), "unfitted queries are zero-width"
+
+    fitted = TfidfEmbeddingBackend()
+    fitted.encode_documents(["good text", "more text here"])
+    blank = fitted.encode_query("")
+    assert blank.shape[0] == fitted.encode_query("text").shape[0]
+    assert float(abs(blank).sum()) == 0.0, "a blank query encodes to the zero vector"
+
+
+def test_load_corpus_json_formats_and_rejections(tmp_path: Path) -> None:
+    """JSON corpora load from a wrapped {"documents": [...]} envelope or a bare list;
+    anything else is rejected by name, and blank files load as empty."""
+    import json
+
+    wrapped = tmp_path / "wrapped.json"
+    wrapped.write_text(json.dumps({"documents": [{"id": "d1", "title": "T", "text": "body one"}]}))
+    assert [d.doc_id for d in load_corpus(wrapped)] == ["d1"]
+
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps([{"id": "d2", "title": "T", "text": "body two"}]))
+    assert [d.doc_id for d in load_corpus(bare)] == ["d2"]
+
+    for name, payload in (("notlist.json", {"documents": "oops"}), ("flat.json", {"doc": "x"})):
+        bad = tmp_path / name
+        bad.write_text(json.dumps(payload))
+        with pytest.raises(ValueError, match="Expected a JSON list"):
+            load_corpus(bad)
+
+    empty = tmp_path / "empty.json"
+    empty.write_text("   ")
+    assert load_corpus(empty) == []

@@ -246,3 +246,41 @@ def test_cli_min_groundedness_gates_the_run() -> None:
     # An empty query yields no supported sentences, so groundedness is 0.0.
     exit_fail = cli_main(["--question", "", "--min-groundedness", "0.5"])
     assert exit_fail == 1
+
+
+def test_pipeline_compare_builds_rank_matrix() -> None:
+    """compare() reports per-mode dense-ordinal ranks plus a hybrid-ordered union."""
+    corpus = load_corpus(Path("data/sample_corpus.jsonl"))
+    pipeline = RAGPipeline(corpus=corpus)
+    matrix = pipeline.compare("hybrid retrieval ranking", top_k=5)
+
+    assert set(matrix["modes"]) == {"bm25", "dense", "hybrid"}
+    for mode, rows in matrix["modes"].items():
+        assert rows, f"{mode} returned no rows"
+        assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1)), f"{mode} ranks must be dense ordinals"
+
+    union = matrix["union"]
+    seen = {r["doc_id"] for rows in matrix["modes"].values() for r in rows}
+    assert {u["doc_id"] for u in union} == seen, "union must cover every doc seen in any mode"
+    hybrid_order = [u["hybrid_rank"] for u in union if u["hybrid_rank"] is not None]
+    assert hybrid_order == sorted(hybrid_order), "rows must be ordered by hybrid rank"
+
+
+def test_cli_compare_prints_rank_matrix(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = cli_main(["--compare", "--question", "hybrid retrieval ranking", "--top-k", "5"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "bm25" in out and "dense" in out and "hybrid" in out, "table must show all three modes"
+    assert "rag-05" in out, "table must list ranked documents"
+
+
+def test_cli_compare_json_and_gate_conflict(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = cli_main(["--compare", "--json", "--question", "hybrid retrieval ranking"])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload["modes"]) == {"bm25", "dense", "hybrid"}
+    assert payload["union"]
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main(["--compare", "--min-groundedness", "0.5"])
+    assert excinfo.value.code != 0, "--min-groundedness gates an answer; compare produces none"
