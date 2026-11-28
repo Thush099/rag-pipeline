@@ -352,3 +352,27 @@ def test_tfidf_unfittable_tokenization_and_blank_query_contracts() -> None:
     blank = fitted.encode_query("")
     assert blank.shape[0] == fitted.encode_query("text").shape[0]
     assert float(abs(blank).sum()) == 0.0, "a blank query encodes to the zero vector"
+
+
+def test_load_corpus_json_formats_and_rejections(tmp_path: Path) -> None:
+    """JSON corpora load from a wrapped {"documents": [...]} envelope or a bare list;
+    anything else is rejected by name, and blank files load as empty."""
+    import json
+
+    wrapped = tmp_path / "wrapped.json"
+    wrapped.write_text(json.dumps({"documents": [{"id": "d1", "title": "T", "text": "body one"}]}))
+    assert [d.doc_id for d in load_corpus(wrapped)] == ["d1"]
+
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps([{"id": "d2", "title": "T", "text": "body two"}]))
+    assert [d.doc_id for d in load_corpus(bare)] == ["d2"]
+
+    for name, payload in (("notlist.json", {"documents": "oops"}), ("flat.json", {"doc": "x"})):
+        bad = tmp_path / name
+        bad.write_text(json.dumps(payload))
+        with pytest.raises(ValueError, match="Expected a JSON list"):
+            load_corpus(bad)
+
+    empty = tmp_path / "empty.json"
+    empty.write_text("   ")
+    assert load_corpus(empty) == []
