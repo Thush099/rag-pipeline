@@ -246,3 +246,21 @@ def test_cli_min_groundedness_gates_the_run() -> None:
     # An empty query yields no supported sentences, so groundedness is 0.0.
     exit_fail = cli_main(["--question", "", "--min-groundedness", "0.5"])
     assert exit_fail == 1
+
+
+def test_cli_missing_corpus_reports_clean_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main(["--corpus", str(tmp_path / "does_not_exist.jsonl")])
+    assert excinfo.value.code == 2
+    assert "corpus file not found" in capsys.readouterr().err
+
+
+def test_cli_invalid_min_groundedness_reports_clean_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main(["--min-groundedness", "2.0"])
+    assert excinfo.value.code == 2
+    assert "min-groundedness" in capsys.readouterr().err

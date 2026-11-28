@@ -137,13 +137,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    corpus = load_corpus(args.corpus)
-    config = RAGPipelineConfig(
-        corpus_path=args.corpus,
-        top_k=args.top_k,
-        mode=args.mode,
-        use_cross_encoder_re_ranker=not args.no_rerank,
-    )
+    corpus_path = Path(args.corpus)
+    if not corpus_path.is_file():
+        parser.error(f"corpus file not found: {corpus_path}")
+
+    if args.min_groundedness is not None and (
+        not math.isfinite(args.min_groundedness) or not 0.0 <= args.min_groundedness <= 1.0
+    ):
+        parser.error(
+            f"--min-groundedness must be a finite value in [0, 1]; got {args.min_groundedness!r}"
+        )
+
+    try:
+        corpus = load_corpus(corpus_path)
+        config = RAGPipelineConfig(
+            corpus_path=args.corpus,
+            top_k=args.top_k,
+            mode=args.mode,
+            use_cross_encoder_re_ranker=not args.no_rerank,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     pipeline = RAGPipeline(corpus=corpus, config=config)
     rerank_flag = False if args.no_rerank else None
     result = pipeline.run(
