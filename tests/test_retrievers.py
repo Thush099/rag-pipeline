@@ -334,3 +334,21 @@ def test_optional_top_k_none_still_means_untruncated() -> None:
 
     reranker = CrossEncoderReRanker(corpus)
     assert len(reranker.re_rank(candidates, "BM25", top_k=None)) == len(candidates)
+
+
+def test_tfidf_unfittable_tokenization_and_blank_query_contracts() -> None:
+    """Single-character-only text produces an empty feature space (documented, not a
+    crash), unfitted queries encode to a zero-width vector, and a blank query on a
+    fitted backend encodes to the zero vector at the model width."""
+    from src.models import TfidfEmbeddingBackend
+
+    emb = TfidfEmbeddingBackend()
+    out = emb.encode_documents([""])
+    assert out.shape == (1, 0), "an unfittable tokenization yields an empty feature space"
+    assert emb.encode_query("anything").shape == (0,), "unfitted queries are zero-width"
+
+    fitted = TfidfEmbeddingBackend()
+    fitted.encode_documents(["good text", "more text here"])
+    blank = fitted.encode_query("")
+    assert blank.shape[0] == fitted.encode_query("text").shape[0]
+    assert float(abs(blank).sum()) == 0.0, "a blank query encodes to the zero vector"
